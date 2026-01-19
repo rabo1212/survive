@@ -6,16 +6,12 @@ const GAME_HEIGHT = 600;
 const PLAYER_SIZE = 40;
 const PLAYER_SPEED = 4;
 const ENEMY_SIZE = 35;
-const XP_SIZE = 15;
-const PICKUP_RANGE = 50;
-const MAGNET_RANGE = 150;
 
 // ========== 타입 정의 ==========
 interface Position { x: number; y: number; }
-interface Player extends Position { hp: number; maxHp: number; level: number; xp: number; xpToNext: number; }
+interface Player extends Position { hp: number; maxHp: number; level: number; killsToNext: number; }
 interface Enemy extends Position { id: number; hp: number; maxHp: number; speed: number; emoji: string; damage: number; xpValue: number; }
 interface Projectile extends Position { id: number; dx: number; dy: number; damage: number; pierce: number; hitEnemies: Set<number>; emoji: string; size: number; }
-interface XPOrb extends Position { id: number; value: number; }
 interface Weapon { id: string; name: string; emoji: string; damage: number; cooldown: number; lastFired: number; level: number; projectileCount: number; pierce: number; description: string; }
 interface UpgradeOption { type: 'weapon' | 'stat'; id: string; name: string; emoji: string; description: string; }
 type GameState = 'start' | 'playing' | 'levelup' | 'gameover' | 'victory';
@@ -99,20 +95,18 @@ const App: React.FC = () => {
   const [gameState, setGameState] = useState<GameState>('start');
   const [gameTime, setGameTime] = useState(0);
   const [kills, setKills] = useState(0);
-  const [player, setPlayer] = useState<Player>({ x: 0, y: 0, hp: 100, maxHp: 100, level: 1, xp: 0, xpToNext: 10 });
+  const [player, setPlayer] = useState<Player>({ x: 0, y: 0, hp: 100, maxHp: 100, level: 1, killsToNext: 10 });
   const [enemies, setEnemies] = useState<Enemy[]>([]);
   const [projectiles, setProjectiles] = useState<Projectile[]>([]);
-  const [xpOrbs, setXpOrbs] = useState<XPOrb[]>([]);
   const [weapons, setWeapons] = useState<Weapon[]>([]);
   const [upgradeOptions, setUpgradeOptions] = useState<UpgradeOption[]>([]);
   const [classroomObjects] = useState(() => generateClassroomObjects());
-  const [stats, setStats] = useState({ damage: 1, speed: 1, pickupRange: 1, maxHp: 1, cooldown: 1 });
+  const [stats, setStats] = useState({ damage: 1, speed: 1, maxHp: 1, cooldown: 1 });
   const [camera, setCamera] = useState({ x: 0, y: 0 });
   
   const keysPressed = useRef<Set<string>>(new Set());
   const enemyIdRef = useRef(0);
   const projectileIdRef = useRef(0);
-  const xpIdRef = useRef(0);
   const gameLoopRef = useRef<number>();
   const lastUpdateRef = useRef(Date.now());
   const playerRef = useRef(player);
@@ -124,7 +118,7 @@ const App: React.FC = () => {
   useEffect(() => { gameTimeRef.current = gameTime; }, [gameTime]);
 
   const startGame = useCallback(() => {
-    const p = { x: 0, y: 0, hp: 100, maxHp: 100, level: 1, xp: 0, xpToNext: 10 };
+    const p = { x: 0, y: 0, hp: 100, maxHp: 100, level: 1, killsToNext: 10 };
     setGameState('playing');
     setGameTime(0);
     gameTimeRef.current = 0;
@@ -133,9 +127,8 @@ const App: React.FC = () => {
     playerRef.current = p;
     setEnemies([]);
     setProjectiles([]);
-    setXpOrbs([]);
     setWeapons([{ ...WEAPON_DEFS.book, level: 1, lastFired: 0 }]);
-    setStats({ damage: 1, speed: 1, pickupRange: 1, maxHp: 1, cooldown: 1 });
+    setStats({ damage: 1, speed: 1, maxHp: 1, cooldown: 1 });
     setCamera({ x: 0, y: 0 });
     enemyIdRef.current = 0;
   }, []);
@@ -187,7 +180,6 @@ const App: React.FC = () => {
     opts.push({ type: 'stat', id: 'speed', name: '이동속도 +10%', emoji: '👟', description: '더 빠르게' });
     opts.push({ type: 'stat', id: 'maxHp', name: '최대체력 +20', emoji: '❤️', description: '체력 증가' });
     opts.push({ type: 'stat', id: 'cooldown', name: '쿨다운 -10%', emoji: '⏱️', description: '발사 속도 증가' });
-    opts.push({ type: 'stat', id: 'pickupRange', name: '획득범위 +20%', emoji: '🧲', description: '획득 범위 증가' });
     setUpgradeOptions(opts.sort(() => Math.random() - 0.5).slice(0, 3));
   }, [weapons]);
 
@@ -201,7 +193,6 @@ const App: React.FC = () => {
         if (opt.id === 'damage') s.damage *= 1.1;
         if (opt.id === 'speed') s.speed *= 1.1;
         if (opt.id === 'cooldown') s.cooldown *= 1.1;
-        if (opt.id === 'pickupRange') s.pickupRange *= 1.2;
         if (opt.id === 'maxHp') { s.maxHp += 0.2; setPlayer(p => ({ ...p, maxHp: p.maxHp + 20, hp: p.hp + 20 })); }
         return s;
       });
@@ -277,30 +268,24 @@ const App: React.FC = () => {
               e.hp -= proj.damage;
               proj.hitEnemies.add(e.id);
               if (proj.hitEnemies.size > proj.pierce) remove = true;
-              if (e.hp <= 0) { setKills(k => k + 1); setXpOrbs(o => [...o, { id: xpIdRef.current++, x: e.x, y: e.y, value: e.xpValue }]); return false; }
+              if (e.hp <= 0) { 
+                setKills(k => {
+                  const newKills = k + 1;
+                  setPlayer(pl => {
+                    if (newKills >= pl.killsToNext) {
+                      setTimeout(() => { setGameState('levelup'); generateUpgrades(); }, 0);
+                      return { ...pl, level: pl.level + 1, killsToNext: pl.killsToNext + 5 + pl.level * 3, hp: Math.min(pl.hp + 20, pl.maxHp) };
+                    }
+                    return pl;
+                  });
+                  return newKills;
+                });
+                return false; 
+              }
             }
             return true;
           }));
           return !remove;
-        });
-      });
-
-      setXpOrbs(prev => {
-        const p = playerRef.current;
-        return prev.filter(o => {
-          const dist = Math.hypot(o.x - p.x, o.y - p.y);
-          const range = PICKUP_RANGE * stats.pickupRange;
-          const magnet = MAGNET_RANGE * stats.pickupRange;
-          if (dist < magnet && dist > range) { o.x += (p.x - o.x) / dist * 5; o.y += (p.y - o.y) / dist * 5; }
-          if (dist < range) {
-            setPlayer(pl => {
-              const xp = pl.xp + o.value;
-              if (xp >= pl.xpToNext) { setTimeout(() => { setGameState('levelup'); generateUpgrades(); }, 0); return { ...pl, level: pl.level + 1, xp: xp - pl.xpToNext, xpToNext: Math.floor(pl.xpToNext * 1.2), hp: Math.min(pl.hp + 10, pl.maxHp) }; }
-              return { ...pl, xp };
-            });
-            return false;
-          }
-          return true;
         });
       });
 
@@ -321,19 +306,18 @@ const App: React.FC = () => {
 
         {gameState === 'playing' && (<>
           {classroomObjects.map((o, i) => <ClassroomObject key={i} obj={o} offsetX={camera.x} offsetY={camera.y} />)}
-          {xpOrbs.map(o => <div key={o.id} style={{ position: 'absolute', left: GAME_WIDTH/2 + o.x - camera.x - XP_SIZE/2, top: GAME_HEIGHT/2 + o.y - camera.y - XP_SIZE/2, width: XP_SIZE, height: XP_SIZE, background: 'radial-gradient(circle, #00ff88, #00aa55)', borderRadius: '50%', boxShadow: '0 0 10px #00ff88', zIndex: 5 }} />)}
           {enemies.map(e => <div key={e.id} style={{ position: 'absolute', left: GAME_WIDTH/2 + e.x - camera.x - ENEMY_SIZE/2, top: GAME_HEIGHT/2 + e.y - camera.y - ENEMY_SIZE/2, width: ENEMY_SIZE, height: ENEMY_SIZE, fontSize: 28, display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 10 }}>{e.emoji}{e.hp < e.maxHp && <div style={{ position: 'absolute', bottom: -8, left: 0, width: '100%', height: 4, background: '#333', borderRadius: 2 }}><div style={{ width: `${(e.hp/e.maxHp)*100}%`, height: '100%', background: '#f44', borderRadius: 2 }} /></div>}</div>)}
           {projectiles.map(p => <div key={p.id} style={{ position: 'absolute', left: GAME_WIDTH/2 + p.x - camera.x - p.size/2, top: GAME_HEIGHT/2 + p.y - camera.y - p.size/2, width: p.size, height: p.size, fontSize: p.size * 0.8, display: 'flex', alignItems: 'center', justifyContent: 'center', transform: `rotate(${Math.atan2(p.dy, p.dx)}rad)`, filter: 'drop-shadow(0 0 5px #ff0)', zIndex: 15 }}>{p.emoji}</div>)}
           <div style={{ position: 'absolute', left: GAME_WIDTH/2 - PLAYER_SIZE/2, top: GAME_HEIGHT/2 - PLAYER_SIZE/2, fontSize: 32, filter: 'drop-shadow(0 0 10px #0ff)', zIndex: 20 }}>🧑‍🎓</div>
           <div style={{ position: 'absolute', top: 10, left: 10, right: 10, display: 'flex', justifyContent: 'space-between', fontSize: 10, zIndex: 100, textShadow: '2px 2px #000' }}>
-            <div><div>⏱️ {formatTime(gameTime)} / 5:00</div><div>💀 {kills}</div></div>
+            <div><div>⏱️ {formatTime(gameTime)} / 5:00</div><div>💀 {kills} / {player.killsToNext}</div></div>
             <div style={{ textAlign: 'right' }}><div>Lv.{player.level}</div><div>🎯 {weapons.map(w => w.emoji).join(' ')}</div></div>
           </div>
           <div style={{ position: 'absolute', bottom: 20, left: '50%', transform: 'translateX(-50%)', width: 200, zIndex: 100 }}>
             <div style={{ width: '100%', height: 20, background: '#333', borderRadius: 10, border: '2px solid #555', overflow: 'hidden' }}><div style={{ width: `${(player.hp/player.maxHp)*100}%`, height: '100%', background: 'linear-gradient(90deg, #f44, #f66)' }} /></div>
             <div style={{ textAlign: 'center', fontSize: 8, marginTop: 5, textShadow: '1px 1px #000' }}>❤️ {Math.ceil(player.hp)} / {player.maxHp}</div>
           </div>
-          <div style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 6, background: '#222', zIndex: 100 }}><div style={{ width: `${(player.xp/player.xpToNext)*100}%`, height: '100%', background: 'linear-gradient(90deg, #0f8, #0fc)' }} /></div>
+          <div style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 6, background: '#222', zIndex: 100 }}><div style={{ width: `${(kills / player.killsToNext) * 100}%`, height: '100%', background: 'linear-gradient(90deg, #0f8, #0fc)' }} /></div>
         </>)}
 
         {gameState === 'start' && (
